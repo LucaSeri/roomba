@@ -158,6 +158,24 @@ void encoderTask(void *parameter) {
   }
 }
 
+volatile int echo_start_time = 0;
+volatile int echo_end_time = 0;
+int echo_pin = 0;
+volatile int echo_state = 0;
+int read_timout = 1000;
+int read_start_time = 0;
+int read_end_time = 0;
+int read_resend_time = 100;
+
+void echoInterrupt() {
+  if (digitalRead(echo_pin) == HIGH) {
+    echo_start_time = micros();
+  } else {
+    echo_state = 2;
+    echo_end_time = micros();
+  }
+}
+
 // Each UDP package contains the information:
 // x y theta distance_to_obstacle sensor_identifier (0 = center, 1 = left, 2 =
 // right)
@@ -195,18 +213,25 @@ void udpTask(void *parameter) {
       int left_speed, right_speed;
       sscanf(buffer, "%d %d", &left_speed, &right_speed);
 
+      left_speed = left_speed / 2;
+      right_speed = right_speed / 2;
+
       if (left_speed > 0) {
+        // left_speed = left_speed + 128;
         analogWrite(LEFT_MOTOR_A, left_speed);
         analogWrite(LEFT_MOTOR_B, 0);
       } else {
+        // left_speed = left_speed - 128;
         analogWrite(LEFT_MOTOR_A, 0);
         analogWrite(LEFT_MOTOR_B, -left_speed);
       }
 
       if (right_speed > 0) {
+        // right_speed = right_speed + 128;
         analogWrite(RIGHT_MOTOR_A, right_speed);
         analogWrite(RIGHT_MOTOR_B, 0);
       } else {
+        // right_speed = right_speed - 128;
         analogWrite(RIGHT_MOTOR_A, 0);
         analogWrite(RIGHT_MOTOR_B, -right_speed);
       }
@@ -215,36 +240,69 @@ void udpTask(void *parameter) {
                      &client_addr_len);
     }
 
-    // Send a package every 0.1 seconds
-
-    if (millis() - last_read_time > 100) {
-      // Alternate which sensor is read each time
+    // No reading started
+    if (echo_state == 0) {
+      // Set the current sensor to read
       read_sensor = (read_sensor + 1) % 3;
-      int distance = 0;
+      if (read_sensor == 0) {
+        echo_pin = CENTER_ECHO;
+      } else if (read_sensor == 1) {
+        echo_pin = LEFT_ECHO;
+      } else if (read_sensor == 2) {
+        echo_pin = RIGHT_ECHO;
+      }
 
+      // Set the state to 1
+      echo_state = 1;
+
+      // Attach the interrupt to this pin
+      attachInterrupt(echo_pin, echoInterrupt, CHANGE);
+
+      read_start_time = millis();
+
+      // Reading started
+      Serial.println("Reading started");
       // Send the pulse
       digitalWrite(TRIG, LOW);
       delayMicroseconds(2);
       digitalWrite(TRIG, HIGH);
       delayMicroseconds(10);
       digitalWrite(TRIG, LOW);
+    }
 
-      // Read the echo
-      if (read_sensor == 0) {
-        distance = pulseIn(CENTER_ECHO, HIGH) / 58;
-      } else if (read_sensor == 1) {
-        distance = pulseIn(LEFT_ECHO, HIGH) / 58;
-      } else {
-        distance = pulseIn(RIGHT_ECHO, HIGH) / 58;
-      }
+    // Reading ended
+    if (echo_state == 2) {
+      Serial.println("Reading ended");
+      // Calculate the distance
+      double distance = (echo_end_time - echo_start_time) * 0.034 / 2.0;
 
-      // Send the UDP packet
-      sprintf(buffer, "%f %f %f %d %d", x, y, theta, distance, read_sensor);
+      // Send the distance to the client
+      sprintf(buffer, "%f %f %f %f %d", x, y, theta, distance, read_sensor);
       sendto(udp_sock, buffer, strlen(buffer), 0,
              (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
 
-      last_read_time = millis();
+      // Set the state to 0
+      echo_state = 3;
+      read_end_time = millis();
+      // Detach the interrupt
+      detachInterrupt(echo_pin);
     }
+
+    if (millis() - read_start_time > read_timout && echo_state == 1) {
+      Serial.println("Reading timed out");
+      // Set the state to 0
+      echo_state = 0;
+
+      // Detach the interrupt
+      detachInterrupt(echo_pin);
+    }
+
+    if (millis() - read_end_time > read_resend_time && echo_state == 3) {
+      Serial.println("Reading resend");
+      // Set the state to 0
+      echo_state = 0;
+    }
+
     vTaskDelay(10);
   }
 }
