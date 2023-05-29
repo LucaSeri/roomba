@@ -70,13 +70,11 @@ void setup() {
   Serial.begin(115200);
   // Connect to WiFi
   WiFi.mode(WIFI_STA);
-  WiFi.begin("home", "parola@home34");
+  WiFi.begin("some-network", "some-password");
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
   }
-
   // Create UDP socket
   udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
   if (udp_sock < 0) {
@@ -165,7 +163,7 @@ volatile int echo_state = 0;
 int read_timout = 1000;
 int read_start_time = 0;
 int read_end_time = 0;
-int read_resend_time = 100;
+int read_resend_time = 50;
 
 void echoInterrupt() {
   if (digitalRead(echo_pin) == HIGH) {
@@ -205,13 +203,14 @@ void udpTask(void *parameter) {
     // Receive a UDP packet
     int ret = recvfrom(udp_sock, buffer, 1024, 0,
                        (struct sockaddr *)&client_addr, &client_addr_len);
-
-    while (ret > 0) {
-      buffer[ret] = '\0';
+    int cnt = 0;
+    while (ret > 0 && cnt < 10) {
+      ++cnt;
 
       // Parse the speed of the left and right motors
       int left_speed, right_speed;
-      sscanf(buffer, "%d %d", &left_speed, &right_speed);
+      left_speed = *(int *)(buffer);
+      right_speed = *(int *)(buffer + 4);
 
       left_speed = left_speed / 2;
       right_speed = right_speed / 2;
@@ -261,7 +260,6 @@ void udpTask(void *parameter) {
       read_start_time = millis();
 
       // Reading started
-      Serial.println("Reading started");
       // Send the pulse
       digitalWrite(TRIG, LOW);
       delayMicroseconds(2);
@@ -272,13 +270,18 @@ void udpTask(void *parameter) {
 
     // Reading ended
     if (echo_state == 2) {
-      Serial.println("Reading ended");
       // Calculate the distance
       double distance = (echo_end_time - echo_start_time) * 0.034 / 2.0;
 
       // Send the distance to the client
-      sprintf(buffer, "%f %f %f %f %d", x, y, theta, distance, read_sensor);
-      sendto(udp_sock, buffer, strlen(buffer), 0,
+      // sprintf(buffer, "%f %f %f %f %d", x, y, theta, distance, read_sensor);
+      memcpy(buffer, &x, sizeof(double));
+      memcpy(buffer + sizeof(double), &y, sizeof(double));
+      memcpy(buffer + 2 * sizeof(double), &theta, sizeof(double));
+      memcpy(buffer + 3 * sizeof(double), &distance, sizeof(double));
+      memcpy(buffer + 4 * sizeof(double), &read_sensor, sizeof(int));
+
+      sendto(udp_sock, buffer, 4 * sizeof(double) + sizeof(int), 0,
              (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
 
       // Set the state to 0
@@ -289,7 +292,6 @@ void udpTask(void *parameter) {
     }
 
     if (millis() - read_start_time > read_timout && echo_state == 1) {
-      Serial.println("Reading timed out");
       // Set the state to 0
       echo_state = 0;
 
@@ -298,7 +300,6 @@ void udpTask(void *parameter) {
     }
 
     if (millis() - read_end_time > read_resend_time && echo_state == 3) {
-      Serial.println("Reading resend");
       // Set the state to 0
       echo_state = 0;
     }
