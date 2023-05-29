@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import pylab
 import socket
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +10,7 @@ import select
 import pygame  # Used to read the joystick
 import math
 import threading
+import struct
 
 def send_controls():
 		UDP_IP = "0.0.0.0"  # Listen on all available interfaces
@@ -29,8 +31,8 @@ def send_controls():
 				pygame.event.get()
 
 				# Get the right trigger value
-				right_trigger = max(joystick.get_axis(5), 0)
-				left_trigger = max(joystick.get_axis(2), 0)
+				right_trigger = (joystick.get_axis(5) + 1) / 2 
+				left_trigger = (joystick.get_axis(2) + 1) / 2
 
 				# Get the left joystick x axxis value
 				left_joystick_x = joystick.get_axis(0)
@@ -48,7 +50,7 @@ def send_controls():
 				left_speed = max(min(left_speed, 255), -255)
 				right_speed = max(min(right_speed, 255), -255)
 
-				print(f"right_trigger: {right_trigger}, left_trigger: {left_trigger}, left_joystick_x: {left_joystick_x}", end="\r")
+				# print(f"right_trigger: {right_trigger}, left_trigger: {left_trigger}, left_joystick_x: {left_joystick_x}", end="\r")
 				# print(f"left_speed: {left_speed}, right_speed: {right_speed}", end="\r")
 
 				# # Read the y values of the two joysticks normalized to [-1, 1]
@@ -58,11 +60,14 @@ def send_controls():
 				left_speed = int(left_speed)
 				right_speed = int(right_speed)
 
-				data = f"{left_speed} {right_speed}"
+				# data = f"{left_speed} {right_speed}"
+
+				# Send data as two 4 bytes integers concatenated
+				data = left_speed.to_bytes(4, byteorder="little", signed=True) + right_speed.to_bytes(4, byteorder="little", signed=True)
 
 				# Send data as a UDP broadcast packet
 				broadcast_addr = "255.255.255.255"
-				sock.sendto(data.encode(), (broadcast_addr, UDP_PORT))
+				sock.sendto(data, (broadcast_addr, UDP_PORT))
 				time.sleep(0.1)
 
 
@@ -102,7 +107,17 @@ def receive_packets():
 				ready, _, _ = select.select([sock], [], [], 0.1)
 
 				data, _ = sock.recvfrom(1024)  # Buffer size is 1024 bytes
-				x, y, theta, distance, sensor = data.decode().split()
+				# x, y, theta, distance, sensor = data.decode().split()
+
+
+				x, y, theta, distance, sensor = data[:8], data[8:16], data[16:24], data[24:32], data[32:]
+
+				# Convert to doubles
+				x = struct.unpack('d', x)[0]
+				y = struct.unpack('d', y)[0]
+				theta = struct.unpack('d', theta)[0]
+				distance = struct.unpack('d', distance)[0]
+				sensor = int.from_bytes(sensor, byteorder="little")
 
 				sensor = int(sensor)
 
@@ -112,10 +127,10 @@ def receive_packets():
 				theta = float(theta)
 				distance = float(distance)
 
-				# print(
-				#     f"x: {x}, y: {y}, theta: {theta * 180 / math.pi}, distance: {distance}, sensor: {sensor}, angle: {angle * 180 / math.pi}",
-				#     end="\r",
-				# )
+				print(
+				    f"x: {x}, y: {y}, theta: {theta * 180 / math.pi}, distance: {distance}, sensor: {sensor}, angle: {angle * 180 / math.pi}",
+				    end="\r",
+				)
 
 				x_points.append(float(x))
 				y_points.append(float(y))
@@ -125,7 +140,7 @@ def receive_packets():
 				maxy = max(maxy, y)
 				miny = min(miny, y)
 
-				if 0 < distance < 80:
+				if 0 < distance < 30:
 						obstacle_x = x + distance * math.cos(theta + angle)
 						obstacle_y = -y + distance * math.sin(theta + angle)
 
@@ -184,6 +199,9 @@ def receive_packets():
 
 				plt.arrow(y_points[-1], x_points[-1], arrow_size * math.cos(theta + math.pi / 2), arrow_size * math.sin(theta + math.pi / 2), width=arrow_size / 10, color='red')
 
+				# Change plt window name
+				fig.canvas.set_window_title("Robot Map")
+
 				plt.draw()
 				plt.pause(0.0001)
 
@@ -234,10 +252,10 @@ def receive_packets_old():
 				theta = float(theta)
 				distance = float(distance)
 
-				print(
-						f"x: {x}, y: {y}, theta: {theta * 180 / math.pi}, distance: {distance}, sensor: {sensor}, angle: {angle * 180 / math.pi}",
-						end="\r",
-				)
+				# print(
+				# 		f"x: {x}, y: {y}, theta: {theta * 180 / math.pi}, distance: {distance}, sensor: {sensor}, angle: {angle * 180 / math.pi}",
+				# 		end="\r",
+				# )
 
 				# Plot the x, y points
 				x_points.append(float(x))
@@ -248,7 +266,10 @@ def receive_packets_old():
 				maxy = max(maxy, y)
 				miny = min(miny, y)
 
-				if 0 < distance < 30:
+				if 1 < distance < 50:
+						
+						distance *= 2
+
 						obstacle_x = x + distance * math.cos(theta + angle)
 						obstacle_y = -y + distance * math.sin(theta + angle)
 
@@ -270,7 +291,6 @@ def receive_packets_old():
 				scatter.set_color("blue")
 
 				_ = ax.scatter(obstacle_y_points, obstacle_x_points, color="red")
-
 
 				# Change the plot size based on the points
 				plt.draw()
